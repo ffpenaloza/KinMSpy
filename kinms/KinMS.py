@@ -27,7 +27,7 @@ from astropy.convolution import convolve_fft
 from astropy.convolution import convolve
 import warnings; warnings.filterwarnings("ignore")
 from kinms.utils.KinMS_figures import KinMS_plotter
-import sys; sys.tracebacklimit = 0
+#import sys; sys.tracebacklimit = 0
 
 class KinMSError(Exception):
     """
@@ -54,7 +54,7 @@ class KinMS:
     #=========================================================================#
 
     def __init__(self, xs, ys, vs, cellSize, dv, beamSize, inc, posAng, gasSigma=0, diskThick=0, flux_clouds=None, 
-                 sbProf=[], sbRad=[], velRad=[], velProf=[], inClouds=[], vLOS_clouds=[], massDist=[], 
+                 sbProf=[], sbRad=[], velRad=[], velProf=[], inClouds=[], vLOS_clouds=[], massDist=[], inflowVel=0,
                  ra=None, dec=None, nSamps=None, seed=None, intFlux=None, vSys=None, phaseCent=[0,0], vOffset=0,
                  vPosAng=[], vPhaseCent=[0,0], restFreq=None, fileName='', fixSeed=False,
                  cleanOut=False, returnClouds=False, huge_beam=False, verbose=False):
@@ -196,11 +196,12 @@ class KinMS:
         self.inClouds = np.array(inClouds)
         self.vLOS_clouds = np.array(vLOS_clouds) 
         self.massDist = np.array(massDist)
+
         self.ra = ra 
         self.dec = dec
         self.seed = seed or np.array([100, 101, 102, 103], dtype='int')
         self.intFlux = intFlux or 0
-        self.vSys = vSys
+        self.vSys = vSys or 0
         self.phaseCent = np.array(phaseCent) 
         self.vOffset = vOffset or 0
         self.vPhaseCent = np.array(vPhaseCent) 
@@ -264,6 +265,12 @@ class KinMS:
             self.sbProf = np.array([sbProf])
 
         try:
+            if len(inflowVel) > -1:
+                self.inflowVel = np.array(inflowVel)
+        except:
+            self.inflowVel = np.array([inflowVel])            
+
+        try:
             if len(sbRad) > -1:
                 self.sbRad = np.array(sbRad)
         except:
@@ -281,12 +288,16 @@ class KinMS:
         except:
             self.velProf = np.array([velProf])
 
-        try:
-            if len(flux_clouds) > -1:
-                self.flux_clouds = np.array(flux_clouds)
-        except:
-            self.flux_clouds = np.array([flux_clouds])
 
+        if np.any(flux_clouds) != None:
+            try:
+                if len(flux_clouds) > -1:
+                    self.flux_clouds = np.array(flux_clouds)
+            except:
+                self.flux_clouds = np.array([flux_clouds])
+        else:
+            self.flux_clouds = None
+            
         if self.verbose:
             self.print_variables()
         
@@ -563,8 +574,6 @@ class KinMS:
             seed = self.seed
                                                                 
         vRad = np.interp(r_flatv, velRad, self.velProf)  # Evaluate the velocity profile at the sampled radii
-        
-
 
         # Calculate a peculiar velocity for each cloudlet based on the velocity dispersion
         rng4 = np.random.RandomState(seed[3]) 
@@ -603,7 +612,18 @@ class KinMS:
         los_vel = velDisp + ((-1) * vRad * (np.cos(np.arctan2((self.y_pos - self.vPhaseCent[1]),
                 (self.x_pos - self.vPhaseCent[0])) + (np.radians(posAng_rad - vPosAng_rad))) * np.sin(np.radians(inc_rad))))
 
-
+        
+        # add a radial velocity component
+        if len(self.inflowVel) > 1:
+            inflow_rad=np.interp(r_flatv, velRad, self.inflowVel)
+            los_vel+=inflow_rad*(np.sin(np.arctan2((self.y_pos - self.vPhaseCent[1]),
+                (self.x_pos - self.vPhaseCent[0])) + (np.radians(posAng_rad - vPosAng_rad))) * np.sin(np.radians(inc_rad)))
+        else:
+            if self.inflowVel != 0:
+               los_vel+=self.inflowVel*(np.sin(np.arctan2((self.y_pos - self.vPhaseCent[1]),
+                   (self.x_pos - self.vPhaseCent[0])) + (np.radians(posAng_rad - vPosAng_rad))) * np.sin(np.radians(inc_rad)))         
+            
+                
         # Output the array of los velocities
         return los_vel
         
@@ -625,15 +645,12 @@ class KinMS:
         hdu.header['CDELT1'] = (self.cellSize / -3600)
         hdu.header['CDELT2'] = (self.cellSize / 3600)
         hdu.header['CDELT3'] = (self.dv * 1000.)
-        hdu.header['CRPIX1'] = (cent[0] - 1)
-        hdu.header['CRPIX2'] = (cent[1] - 1)
-        hdu.header['CRPIX3'] = (cent[2] -1)
-        hdu.header['CRVAL1'] = (self.ra) or "None given" 
-        hdu.header['CRVAL2'] = (self.dec) or "None given"
-        try:
-            hdu.header['CRVAL3'] = (self.vSys * 1000.), 'm/s'
-        except:
-            "None given"
+        hdu.header['CRPIX1'] = (cent[0] + 1)
+        hdu.header['CRPIX2'] = (cent[1] + 1)
+        hdu.header['CRPIX3'] = (cent[2] + 1)
+        hdu.header['CRVAL1'] = (self.ra) or 0.0 
+        hdu.header['CRVAL2'] = (self.dec) or 0.0
+        hdu.header['CRVAL3'] = (self.vSys * 1000.), 'm/s'
         hdu.header['CUNIT1'] = 'deg'
         hdu.header['CUNIT2'] = 'deg'
         hdu.header['CUNIT3'] = 'm/s     '
@@ -949,7 +966,7 @@ class KinMS:
 
         if nsubs > 0:
 
-            if len(self.flux_clouds) > 1:
+            if np.any(self.flux_clouds) != None:
 
                 if not self.inClouds_given:
                     raise KinMSError('\n\"flux_clouds\" can only be used in combination with \"inClouds\". '
@@ -992,7 +1009,7 @@ class KinMS:
             else:
                 cube *= (self.intFlux / (cube.sum() * self.dv))
 
-        elif len(self.flux_clouds) > 0:
+        elif np.any(self.flux_clouds) != None:
             cube *= (self.flux_clouds.sum() / cube.sum())
 
         else:
